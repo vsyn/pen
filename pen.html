@@ -1,0 +1,345 @@
+<!--Copyright 2025 Julian Ingram
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+ 
+ http://www.apache.org/licenses/LICENSE-2.0
+ 
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+ -->
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name=viewport content="width=device-width, initial-scale=1"> 
+  <title>pen</title>
+</head>
+<body style="background-color:#000000; color:#b0b0b0">
+
+<script>
+
+const decoder_str = `
+  <script>
+
+  function msg(s) {
+    document.getElementById("msg").innerHTML = s;
+  }
+
+  function Decoder() {
+    let value = "";
+    let buffer = new Uint8Array(1024 * 8 * 3); /* Buffer length must be a miltiple of 3 */
+    let count = 0;
+
+    function decode_1(c) {
+      return (c > 0x5b) ? c - 0x24 : c - 0x23;
+    }
+
+    function decode_4() {
+      const n = value.length - 1;
+      let v = 0;
+      for (let i = n; i >= 0; --i) {
+        v <<= 6;
+        v |= decode_1(value.charCodeAt(i));
+      }
+      for (let i = 0; i < n; ++i) {
+        buffer[count] = v & 0xff;
+        ++count;
+        v >>= 8;
+      }
+      if (count >= buffer.length) {
+        count = 0;
+        return buffer;
+      }
+    }
+
+    function proc() {
+      const rc = decode_4();
+      value = "";
+      return rc;
+    }
+
+    function close() {
+      proc();
+      const prev_count = count;
+      count = 0;
+      return buffer.slice(0, prev_count);
+    }
+
+    function decode(c) {
+      value += c;
+      return (value.length == 4) ? proc() : null;
+    }
+
+    return {
+      close: close,
+      decode: decode
+    };
+  }`;
+
+const data_foot = "\";}";
+
+function Encoder() {
+  let value = 0;
+  let state = 0;
+  let buffer = new Uint8Array(1024 * 8 * 4); /* Buffer length must be a miltiple of 4 */
+  let count = 0;
+  const text_decoder = new TextDecoder();
+
+  function encode_1(b) {
+    const t = b + 0x23;
+    return (t > 0x5b) ? t + 1 : t;
+  }
+
+  function encode_3() {
+    for (let i = 0; i < state + 1; ++i) {
+      const c = encode_1(value & 0x3f);
+      buffer[count] = c;
+      ++count;
+      value >>= 6;
+    }
+    if (count >= buffer.length) {
+      count = 0;
+      return text_decoder.decode(buffer);
+    }
+    return null;
+  }
+
+  function proc() {
+    const rc = encode_3();
+    state = 0;
+    value = 0;
+    return rc;
+  }
+
+  function close() {
+    if (state)
+      proc();
+    const prev_count = count;
+    count = 0;
+    return text_decoder.decode(buffer.slice(0, prev_count));
+  }
+
+  function encode(b) {
+    value |= b << (state * 8);
+    ++state;
+    return (state == 3) ? proc() : null;
+  }
+
+  return {
+    close: close,
+    encode: encode
+  };
+}
+
+function msg(s) {
+  document.getElementById("msg").innerHTML = s;
+}
+
+function head(filename) {
+  return `<!--
+    Copyright 2025 Julian Ingram,
+    The software that generated this file can be found at
+    github.com/vsyn/pen
+    -->
+
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <meta name=viewport content="width=device-width, initial-scale=1"> 
+    <title>${filename}</title>
+  </head>
+  <body style="background-color:#000000; color:#b0b0b0">
+  `
+}
+
+function mono_head(filename) {
+  return head(filename) + decoder_str + `const data = "`;
+}
+
+function mono_foot(filename) {
+  return `";
+  async function file_save() {
+    const output_dir = await window.showDirectoryPicker();
+    msg("Working...");
+    const output_file = await output_dir.getFileHandle("${filename}", { create: true });
+    const writable = await output_file.createWritable();
+    const decoder = Decoder();
+    for (let i = 0, l = data.length; i < l; ++i) {
+      const sdata = decoder.decode(data[i]);
+      if (sdata)
+        await writable.write(sdata);
+    }
+    await writable.write(decoder.close());
+    await writable.close();
+    msg("Done");
+  }
+  <\/script>
+
+  <button onclick="file_save();">Get File</button>
+  <div id="msg"></div>
+
+  </body>
+  </html>
+  `
+}
+
+function multi_foot(filename, data_file_count) {
+  let s = `
+  async function file_save() {
+    const handle = await window.showSaveFilePicker({suggestedName: "${filename}"});
+    const writable = await handle.createWritable();
+    msg("Working...");
+    const decoder = Decoder();
+    async function write_data(data) {
+      for (let i = 0, l = data.length; i < l; ++i) {
+        const sdata = decoder.decode(data[i]);
+        if (sdata)
+          await writable.write(sdata);
+      }
+    }
+    let data;
+    `
+    for (let i = 0; i < data_file_count; ++i) {
+      s += `await write_data(data${i}());
+    `;
+    }
+    return s + `
+    await writable.write(decoder.close());
+    await writable.close();
+    msg("Done");
+  }
+  <\/script>
+
+  <button onclick="file_save();" style="display: inline-block; margin-right: 1rem;">Get File</button>
+  <div id="msg"></div>
+
+  </body>
+  </html>
+  `;
+}
+
+function data_head(file_count) {
+  return `function data${file_count}(){return \"`;
+}
+
+async function mono_file(writable, reader, filename) {
+  await writable.write(mono_head(filename));
+  const encoder = Encoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done)
+      break;
+    for (let i = 0, l = value.length; i < l; ++i) {
+      const sdata = encoder.encode(value[i]);
+      if (sdata)
+        await writable.write(sdata);
+    }
+  }
+  await writable.write(encoder.close());
+  await writable.write(mono_foot(filename));
+}
+
+async function multi_file(main_writable, reader, filename, output_dir, split_size) {
+  let data_file_count = 0;
+  let data_file_name = filename + ".pen" + data_file_count;
+  let data_file = await output_dir.getFileHandle(data_file_name, { create: true });
+  let data_writable = await data_file.createWritable();
+
+  async function write_script_tag() {
+    await main_writable.write(`<script type=\"text/javascript\" src=\"${data_file_name}\"><\/script>
+    `);
+  }
+
+  await main_writable.write(head(filename));
+  await write_script_tag();
+
+  let dhead = data_head(data_file_count);
+  await data_writable.write(dhead);
+  
+  let encoder = Encoder();
+  let written = dhead.length;
+  let state = 0;
+
+  async function end_data() {
+    await data_writable.write(encoder.close());
+    await data_writable.write(data_foot);
+    await data_writable.close();
+  }
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done)
+      break;
+    for (let i = 0, l = value.length; i < l; ++i) {
+      const sdata = encoder.encode(value[i]);
+      if (sdata)
+        await data_writable.write(sdata);
+      if (state < 2)
+        ++state;
+      else {
+        state = 0;
+        written += 4;
+        if (written >= (split_size - data_foot.length - 4)) {
+          await end_data();
+          ++data_file_count;
+          data_file_name = filename + ".pen" + data_file_count;
+          await write_script_tag();
+
+          data_file = await output_dir.getFileHandle(data_file_name, { create: true });
+          data_writable = await data_file.createWritable();
+          dhead = data_head(data_file_count);
+          await data_writable.write(dhead);
+          written  = dhead.length;
+        }
+      }
+    }
+  }
+  await end_data();
+  await main_writable.write(decoder_str + multi_foot(filename, data_file_count + 1));
+}
+
+async function dir_load() {
+  msg("");
+  const input_file = document.getElementById("file").files[0];
+  if (!input_file) {
+    msg("Choose input file first");
+    return;
+  }
+  const output_dir = await window.showDirectoryPicker();
+  msg("Working...");
+
+  const filename = input_file.name;
+  const split_size = document.getElementById("split_size").value * 1024;
+  const encoded_size = Math.ceil((input_file.size * 4) / 3);
+  const overhead_size = mono_head(filename).length + mono_foot(filename).length;
+
+  const stream = input_file.stream();
+  const reader = stream.getReader();
+
+  const output_file = await output_dir.getFileHandle(input_file.name + ".html", { create: true });
+  const main_writable = await output_file.createWritable();
+
+  if (((encoded_size + overhead_size) <= split_size) || (split_size <= 1024)) 
+    await mono_file(main_writable, reader, filename);
+  else
+    await multi_file(main_writable, reader, filename, output_dir, split_size);
+  await main_writable.close();
+  msg("Done");
+}
+
+</script>
+
+<input type="file" id="file" onchange="msg('Choose output directory');" style="display: inline-block; margin-right: 1rem;">
+<div style="display: inline-block; margin-right: 1rem;">Split size: <input type="number" id="split_size" value="0"> KiB</div>
+<button onclick="dir_load();" style="display: inline-block; margin-right: 1rem;">Output Directory</button>
+<div id="msg" style="display: inline-block; margin-right: 1rem;"></div>
+
+</body>
+</html>
