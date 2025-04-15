@@ -82,7 +82,21 @@ const decoder_str = `
     };
   }`;
 
-const data_foot = "\";}";
+const close_str = `
+    await writable.write(decoder.close());
+    await writable.close();
+    msg("Done");
+  }
+  <\/script>
+
+  <button onclick="file_save();" style="display: inline-block; margin-right: 1rem;">Get File</button>
+  <div id="msg"></div>
+
+  </body>
+  </html>
+`;
+
+const data_foot_str = "\";}";
 
 function Encoder() {
   let value = 0;
@@ -141,7 +155,7 @@ function msg(s) {
   document.getElementById("msg").innerHTML = s;
 }
 
-function head(filename) {
+function head_str(filename) {
   return `<!--
     Copyright 2025 Julian Ingram,
     The software that generated this file can be found at
@@ -156,81 +170,63 @@ function head(filename) {
     <title>${filename}</title>
   </head>
   <body style="background-color:#000000; color:#b0b0b0">
-  `
-}
-
-function mono_head(filename) {
-  return head(filename) + decoder_str + `const data = "`;
-}
-
-function mono_foot(filename) {
-  return `";
-  async function file_save() {
-    const output_dir = await window.showDirectoryPicker();
-    msg("Working...");
-    const output_file = await output_dir.getFileHandle("${filename}", { create: true });
-    const writable = await output_file.createWritable();
-    const decoder = Decoder();
-    for (let i = 0, l = data.length; i < l; ++i) {
-      const sdata = decoder.decode(data[i]);
-      if (sdata)
-        await writable.write(sdata);
-    }
-    await writable.write(decoder.close());
-    await writable.close();
-    msg("Done");
-  }
-  <\/script>
-
-  <button onclick="file_save();">Get File</button>
-  <div id="msg"></div>
-
-  </body>
-  </html>
-  `
-}
-
-function multi_foot(filename, data_file_count) {
-  let s = `
-  async function file_save() {
-    const handle = await window.showSaveFilePicker({suggestedName: "${filename}"});
-    const writable = await handle.createWritable();
-    msg("Working...");
-    const decoder = Decoder();
-    async function write_data(data) {
-      for (let i = 0, l = data.length; i < l; ++i) {
-        const sdata = decoder.decode(data[i]);
-        if (sdata)
-          await writable.write(sdata);
-      }
-    }
-    let data;
-    `
-    for (let i = 0; i < data_file_count; ++i) {
-      s += `await write_data(data${i}());
-    `;
-    }
-    return s + `
-    await writable.write(decoder.close());
-    await writable.close();
-    msg("Done");
-  }
-  <\/script>
-
-  <button onclick="file_save();" style="display: inline-block; margin-right: 1rem;">Get File</button>
-  <div id="msg"></div>
-
-  </body>
-  </html>
   `;
 }
 
-function data_head(file_count) {
+function mono_head_str(filename) {
+  return head_str(filename) + decoder_str + `
+  const data = "`;
+}
+
+function write_data_str(filename) {
+  return `
+    async function file_save() {
+      if (typeof window.showSaveFilePicker != "function") {
+        msg("Browser does not support showSaveFilePicker");
+        return;
+      }
+      const handle = await window.showSaveFilePicker({suggestedName: "${filename}"});
+      const writable = await handle.createWritable();
+      msg("Working...");
+      const decoder = Decoder();
+      async function write_data(data) {
+        for (let i = 0, l = data.length; i < l; ++i) {
+          const sdata = decoder.decode(data[i]);
+          if (sdata)
+            await writable.write(sdata);
+        }
+      }`;
+}
+
+function mono_foot_str(filename) {
+  return `";
+  ` + write_data_str(filename) + `
+  await write_data(data);` + close_str;
+}
+
+function multi_foot_str(filename, data_file_count) {
+  let s = write_data_str(filename);
+  for (let i = 0; i < data_file_count; ++i) {
+    s += `await write_data(data${i}());
+  `;
+  }
+  return s + close_str;
+}
+
+function data_head_str(file_count) {
   return `function data${file_count}(){return \"`;
 }
 
-async function mono_file(writable, reader, filename) {
-  await writable.write(mono_head(filename));
+async function mono_file(reader, filename) {
+  if (typeof window.showSaveFilePicker != "function") {
+    msg("Browser does not support showSaveFilePicker");
+    return;
+  }
+  const handle = await window.showSaveFilePicker({suggestedName: filename + ".html"});
+  msg("Working...");
+  
+  const writable = await handle.createWritable();
+  await writable.write(mono_head_str(filename));
   const encoder = Encoder();
   while (true) {
     const { done, value } = await reader.read();
@@ -243,10 +239,21 @@ async function mono_file(writable, reader, filename) {
     }
   }
   await writable.write(encoder.close());
-  await writable.write(mono_foot(filename));
+  await writable.write(mono_foot_str(filename));
+  await writable.close();
 }
 
-async function multi_file(main_writable, reader, filename, output_dir, split_size) {
+async function multi_file(reader, filename, split_size) {
+  if (typeof window.showDirectoryPicker != "function") {
+    msg("Browser does not support showDirectoryPicker");
+    return;
+  }
+  const output_dir = await window.showDirectoryPicker();
+  msg("Working...");
+
+  const handle = await output_dir.getFileHandle(filename + ".html", { create: true });
+  const main_writable = await handle.createWritable();
+
   let data_file_count = 0;
   let data_file_name = filename + ".pen" + data_file_count;
   let data_file = await output_dir.getFileHandle(data_file_name, { create: true });
@@ -257,10 +264,10 @@ async function multi_file(main_writable, reader, filename, output_dir, split_siz
     `);
   }
 
-  await main_writable.write(head(filename));
+  await main_writable.write(head_str(filename));
   await write_script_tag();
 
-  let dhead = data_head(data_file_count);
+  let dhead = data_head_str(data_file_count);
   await data_writable.write(dhead);
   
   let encoder = Encoder();
@@ -269,7 +276,7 @@ async function multi_file(main_writable, reader, filename, output_dir, split_siz
 
   async function end_data() {
     await data_writable.write(encoder.close());
-    await data_writable.write(data_foot);
+    await data_writable.write(data_foot_str);
     await data_writable.close();
   }
   
@@ -286,7 +293,7 @@ async function multi_file(main_writable, reader, filename, output_dir, split_siz
       else {
         state = 0;
         written += 4;
-        if (written >= (split_size - data_foot.length - 4)) {
+        if (written >= (split_size - data_foot_str.length - 4)) {
           await end_data();
           ++data_file_count;
           data_file_name = filename + ".pen" + data_file_count;
@@ -294,7 +301,7 @@ async function multi_file(main_writable, reader, filename, output_dir, split_siz
 
           data_file = await output_dir.getFileHandle(data_file_name, { create: true });
           data_writable = await data_file.createWritable();
-          dhead = data_head(data_file_count);
+          dhead = data_head_str(data_file_count);
           await data_writable.write(dhead);
           written  = dhead.length;
         }
@@ -302,7 +309,8 @@ async function multi_file(main_writable, reader, filename, output_dir, split_siz
     }
   }
   await end_data();
-  await main_writable.write(decoder_str + multi_foot(filename, data_file_count + 1));
+  await main_writable.write(decoder_str + multi_foot_str(filename, data_file_count + 1));
+  await main_writable.close();
 }
 
 async function dir_load() {
@@ -312,33 +320,28 @@ async function dir_load() {
     msg("Choose input file first");
     return;
   }
-  const output_dir = await window.showDirectoryPicker();
-  msg("Working...");
 
   const filename = input_file.name;
   const split_size = document.getElementById("split_size").value * 1024;
   const encoded_size = Math.ceil((input_file.size * 4) / 3);
-  const overhead_size = mono_head(filename).length + mono_foot(filename).length;
+  const overhead_size = mono_head_str(filename).length + mono_foot_str(filename).length;
 
   const stream = input_file.stream();
   const reader = stream.getReader();
 
-  const output_file = await output_dir.getFileHandle(input_file.name + ".html", { create: true });
-  const main_writable = await output_file.createWritable();
-
-  if (((encoded_size + overhead_size) <= split_size) || (split_size <= 1024)) 
-    await mono_file(main_writable, reader, filename);
+  if (((encoded_size + overhead_size) <= split_size) || (split_size <= 1024))
+    await mono_file(reader, filename);
   else
-    await multi_file(main_writable, reader, filename, output_dir, split_size);
-  await main_writable.close();
+    await multi_file(reader, filename, split_size);
+  
   msg("Done");
 }
 
 </script>
 
-<input type="file" id="file" onchange="msg('Choose output directory');" style="display: inline-block; margin-right: 1rem;">
+<input type="file" id="file" onchange="msg('Choose output location');" style="display: inline-block; margin-right: 1rem;">
 <div style="display: inline-block; margin-right: 1rem;">Split size: <input type="number" id="split_size" value="0"> KiB</div>
-<button onclick="dir_load();" style="display: inline-block; margin-right: 1rem;">Output Directory</button>
+<button onclick="dir_load();" style="display: inline-block; margin-right: 1rem;">Output location</button>
 <div id="msg" style="display: inline-block; margin-right: 1rem;"></div>
 
 </body>
